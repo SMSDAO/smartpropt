@@ -49,7 +49,7 @@ export default async function AdminPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
           <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
             <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
               Total Users
@@ -64,6 +64,14 @@ export default async function AdminPage() {
             </h3>
             <p className="text-2xl font-bold text-gray-900 dark:text-white mt-2">
               {users?.filter((u) => u.subscription_tier === 'pro').length || 0}
+            </p>
+          </div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+            <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
+              Enterprise Users
+            </h3>
+            <p className="text-2xl font-bold text-gray-900 dark:text-white mt-2">
+              {users?.filter((u) => u.subscription_tier === 'enterprise').length || 0}
             </p>
           </div>
           <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">

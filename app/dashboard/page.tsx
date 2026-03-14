@@ -21,7 +21,7 @@ interface UsageInfo {
 
 export default function DashboardPage() {
   const [prompt, setPrompt] = useState('')
-  const [model, setModel] = useState('gpt-4')
+  const [model, setModel] = useState('gpt-4o')
   const [context, setContext] = useState('')
   const [result, setResult] = useState<OptimizeResult | null>(null)
   const [usageInfo, setUsageInfo] = useState<UsageInfo | null>(null)
@@ -139,10 +139,10 @@ export default function DashboardPage() {
                   onChange={(e) => setModel(e.target.value)}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
                 >
-                  <option value="gpt-4">GPT-4</option>
+                  <option value="gpt-4o">GPT-4o (Recommended)</option>
+                  <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
+                  <option value="gpt-4o-mini">GPT-4o Mini</option>
                   <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                  <option value="claude">Claude</option>
-                  <option value="gemini">Gemini</option>
                 </select>
               </div>
 
