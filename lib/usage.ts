@@ -86,6 +86,50 @@ export async function incrementUsage(userId: string): Promise<void> {
 }
 
 /**
+ * Decrement usage count by 1, never going below 0.
+ *
+ * Used to roll back an incremented quota slot when a downstream call
+ * (e.g. the OpenAI optimisation) fails after the atomic check-and-increment
+ * has already consumed a slot. Errors here are non-fatal and are only logged
+ * so that a rollback failure never masks the original error.
+ */
+export async function decrementUsage(userId: string): Promise<void> {
+  const supabase = await createServerSupabaseClient()
+
+  // Try the RPC-based decrement first (defined in scripts/setup-atomic-usage.sql)
+  const { error } = await supabase.rpc('decrement_usage', { user_id: userId })
+
+  if (!error) return
+
+  // RPC not yet deployed — fall back to a conditional direct update.
+  // Minor race conditions on this fallback path are acceptable; the primary
+  // increment path is already protected by row-level locking.
+  if (error.code === 'PGRST202' || error.message?.includes('decrement_usage')) {
+    const { data: user } = await supabase
+      .from('users')
+      .select('usage_count')
+      .eq('id', userId)
+      .single()
+
+    if (user && user.usage_count > 0) {
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          usage_count: user.usage_count - 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', userId)
+
+      if (updateError) {
+        console.error(`Failed to roll back usage for user ${userId}:`, updateError)
+      }
+    }
+  } else {
+    console.error(`Failed to roll back usage for user ${userId}:`, error)
+  }
+}
+
+/**
  * Atomically check usage and increment in a single RPC call.
  * Uses the check_and_increment_usage PostgreSQL function which applies
  * row-level locking (FOR UPDATE) to eliminate race conditions.

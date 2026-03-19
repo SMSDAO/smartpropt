@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { upsertUser } from '@/lib/auth'
-import { atomicCheckAndIncrement } from '@/lib/usage'
+import { atomicCheckAndIncrement, decrementUsage } from '@/lib/usage'
 import { optimizePrompt } from '@/src/services/ai/prompt-optimizer'
 import { checkAIRateLimit } from '@/src/services/ai/rate-limiter'
 import { z } from 'zod'
@@ -79,12 +79,24 @@ export async function POST(req: NextRequest) {
 
     // Optimize the prompt using the service-layer which routes to the best
     // available model for the user's subscription tier.
-    const result = await optimizePrompt({
-      prompt: validatedData.prompt,
-      model: validatedData.model,
-      context: validatedData.context,
-      userTier: user.subscription_tier,
-    })
+    // The usage slot was already reserved above — roll it back if this throws
+    // so the user is not charged for a failed optimisation.
+    let result
+    try {
+      result = await optimizePrompt({
+        prompt: validatedData.prompt,
+        model: validatedData.model,
+        context: validatedData.context,
+        userTier: user.subscription_tier,
+      })
+    } catch (optimizeError) {
+      // Best-effort rollback — errors here are logged, not re-thrown, so
+      // they never mask the original failure.
+      await decrementUsage(userId).catch((rollbackErr) =>
+        console.error(`Usage rollback failed for user ${userId}:`, rollbackErr)
+      )
+      throw optimizeError
+    }
 
     // Return result with usage info
     return NextResponse.json({
