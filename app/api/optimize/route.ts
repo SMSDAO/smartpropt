@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { upsertUser } from '@/lib/auth'
-import { checkUsageLimit, incrementUsage } from '@/lib/usage'
-import { rateLimitAsync } from '@/lib/rate-limit'
-import { optimizePrompt } from '@/lib/openai'
+import { atomicCheckAndIncrement, decrementUsage } from '@/lib/usage'
+import { optimizePrompt } from '@/src/services/ai/prompt-optimizer'
+import { checkAIRateLimit } from '@/src/services/ai/rate-limiter'
 import { z } from 'zod'
 import { createServerSupabaseClient } from '@/lib/supabase'
+import type { SubscriptionTier } from '@/lib/auth'
 
 const OptimizeSchema = z.object({
   prompt: z.string().min(1).max(10000),
@@ -39,11 +40,8 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Rate limiting - 10 requests per minute per user
-    const rateLimitResult = await rateLimitAsync(`optimize:${userId}`, {
-      interval: 60 * 1000,
-      limit: 10,
-    })
+    // Rate limiting — per-minute limits scale with the user's subscription tier.
+    const rateLimitResult = checkAIRateLimit(userId, user.subscription_tier as SubscriptionTier)
 
     if (!rateLimitResult.success) {
       return NextResponse.json(
@@ -62,8 +60,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const validatedData = OptimizeSchema.parse(body)
 
-    // Check usage limit (read-only — does not increment yet)
-    const usageCheck = await checkUsageLimit(userId, user.subscription_tier)
+    // Atomically check and increment usage in a single DB round-trip,
+    // eliminating the race condition between separate check + increment calls.
+    const usageCheck = await atomicCheckAndIncrement(userId, user.subscription_tier)
 
     if (!usageCheck.allowed) {
       return NextResponse.json(
@@ -78,24 +77,25 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Optimize the prompt
-    const result = await optimizePrompt({
-      prompt: validatedData.prompt,
-      model: validatedData.model,
-      context: validatedData.context,
-    })
-
-    // Increment usage only after a successful optimization so that failures
-    // (OpenAI errors, network issues) do not consume the user's quota.
-    let actualRemaining = usageCheck.remaining === -1 ? -1 : usageCheck.remaining - 1
+    // Optimize the prompt using the service-layer which routes to the best
+    // available model for the user's subscription tier.
+    // The usage slot was already reserved above — roll it back if this throws
+    // so the user is not charged for a failed optimisation.
+    let result
     try {
-      await incrementUsage(userId)
-      // Re-read to get the accurate remaining count after increment
-      const updated = await checkUsageLimit(userId, user.subscription_tier)
-      actualRemaining = updated.remaining
-    } catch (usageError) {
-      console.error('Failed to increment usage (non-blocking):', usageError)
-      // Non-blocking: optimization result is returned even if tracking fails
+      result = await optimizePrompt({
+        prompt: validatedData.prompt,
+        model: validatedData.model,
+        context: validatedData.context,
+        userTier: user.subscription_tier,
+      })
+    } catch (optimizeError) {
+      // Best-effort rollback — errors here are logged, not re-thrown, so
+      // they never mask the original failure.
+      await decrementUsage(userId).catch((rollbackErr) =>
+        console.error(`Usage rollback failed for user ${userId}:`, rollbackErr)
+      )
+      throw optimizeError
     }
 
     // Return result with usage info
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
       success: true,
       data: result,
       usage: {
-        remaining: usageCheck.limit === -1 ? -1 : actualRemaining,
+        remaining: usageCheck.remaining,
         limit: usageCheck.limit,
         resetAt: usageCheck.resetAt,
         tier: user.subscription_tier,

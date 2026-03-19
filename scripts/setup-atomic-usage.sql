@@ -56,3 +56,19 @@ BEGIN
   END IF;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- ---------------------------------------------------------------------------
+-- Roll back a usage increment when a downstream call (e.g. OpenAI) fails
+-- after the slot has already been reserved by check_and_increment_usage.
+-- The count is decremented by 1 but never goes below 0.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION decrement_usage(
+  user_id UUID
+) RETURNS VOID AS $$
+BEGIN
+  UPDATE users
+  SET usage_count = GREATEST(usage_count - 1, 0),
+      updated_at  = NOW()
+  WHERE id = user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
